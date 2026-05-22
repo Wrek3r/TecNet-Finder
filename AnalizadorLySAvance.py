@@ -3,9 +3,15 @@ import math
 import tkinter as tk
 import ipaddress
 from tkinter import ttk, font, scrolledtext, messagebox
+
 # --- LÉXICO ---
+# Analizador léxico de TecNet Finder.
+# Recorre el texto ingresado y lo convierte en tokens.
 class VLSMLexer:
     def __init__(self):
+        # Lista de patrones léxicos.
+        # Cada elemento contiene una expresión regular y el tipo de token que genera.
+        # El orden es importante porque las palabras reservadas se revisan antes que IDENTIFIER.
         self.tokens = [
             (r'\bIP\b', 'IP'),
             (r'\bMASK\b','MASK'),
@@ -20,6 +26,8 @@ class VLSMLexer:
             (r'\s+', None),
         ]
 
+    # Convierte el texto de entrada en tokens.
+    # Si una parte no coincide con ningún patrón, se registra como error léxico.
     def tokenize(self, code):
         tokens = []
         errores = []
@@ -66,12 +74,17 @@ class VLSMLexer:
 
 
 # --- SINTÁCTICO ---
+# Esta clase recibe los tokens generados por el lexer
+# y verifica que aparezcan en el orden correcto.
 class VLSMParser:
     def __init__(self, tokens):
         self.tokens = tokens
         self.pos = 0
         self.errors = []
 
+    # Procesa todos los bloques de tokens.
+    # Si un bloque es válido, lo agrega a los resultados.
+    # Si hay error sintáctico, lo guarda y trata de continuar.
     def parse(self):
         results = []
         while self.pos < len(self.tokens):
@@ -82,10 +95,14 @@ class VLSMParser:
                 self.synchronize()
         return results
 
+    # Permite recuperarse de un error sintáctico.
+    # Avanza hasta encontrar otro token IP, que puede iniciar una nueva instrucción.
     def synchronize(self):
         while self.pos < len(self.tokens) and self.tokens[self.pos][0] != 'IP':
             self.pos += 1
 
+    # Valida una instrucción completa con la estructura:
+    # IP <IP_ADDRESS> MASK <SUBNET_MASK> HOSTS <lista_hosts> [NAME <IDENTIFIER>]
     def parse_block(self):
         self.expect('IP')
         ip_address = self.expect('IP_ADDRESS')
@@ -112,6 +129,8 @@ class VLSMParser:
             'name': name
         }
 
+    # Procesa la lista de hosts separados por comas.
+    # Ejemplo: 50,30,10 se convierte en [50, 30, 10].
     def parse_hosts(self):
         hosts = []
         while self.pos < len(self.tokens):
@@ -125,6 +144,8 @@ class VLSMParser:
                 break
         return hosts
 
+    # Verifica que el token actual sea del tipo esperado.
+    # Si coincide, avanza; si no coincide, genera un error sintáctico.
     def expect(self, token_type):
         if self.pos < len(self.tokens):
             token = self.tokens[self.pos]
@@ -141,12 +162,17 @@ class VLSMParser:
 
 
 # --- CÁLCULO VLSM ---
+# Calcula las subredes VLSM a partir de una IP base,
+# una máscara y una lista de hosts requeridos.
 def calculate_vlsm(ip_address, subnet_mask, num_hosts_list, nombre_red=None):
     results = []
     current_ip = int(ipaddress.IPv4Address(ip_address))
+
+    # Ordena los hosts de mayor a menor para asignar primero las subredes más grandes.
     sorted_hosts = sorted(num_hosts_list, reverse=True)
 
     for num_hosts in sorted_hosts:
+        # Se suman 2 direcciones: una para red y una para broadcast.
         bits_necesarios = math.ceil(math.log2(num_hosts + 2))
         new_cidr = 32 - bits_necesarios
         block_size = 2 ** bits_necesarios
@@ -157,6 +183,7 @@ def calculate_vlsm(ip_address, subnet_mask, num_hosts_list, nombre_red=None):
         last_usable_ip    = ipaddress.IPv4Address(current_ip + block_size - 2)
         decimal_mask      = str(ipaddress.IPv4Network(f"0.0.0.0/{new_cidr}").netmask)
 
+        # Guarda los datos calculados de la subred actual.
         results.append({
             'hosts_solicitados':      num_hosts,
             'hosts_disponibles':      block_size - 2,
@@ -170,12 +197,14 @@ def calculate_vlsm(ip_address, subnet_mask, num_hosts_list, nombre_red=None):
             'nombre_red':             nombre_red or ip_address,
         })
 
+        # Avanza a la siguiente dirección disponible.
         current_ip += block_size
 
     return results
 
 
 # --- NÚMEROS DE LÍNEA ---
+# Clase auxiliar para mostrar números de línea junto al área de entrada.
 class TextLineNumbers(tk.Canvas):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -197,7 +226,9 @@ class TextLineNumbers(tk.Canvas):
             i = self.textwidget.index(f"{i}+1line")
 
 
-# --- GUI ---
+# --- INTERFAZ GRÁFICA ---
+# Clase principal de la interfaz gráfica de TecNet Finder.
+# Permite ingresar instrucciones, analizarlas y mostrar tokens, errores y tabla VLSM.
 class VLSMApp:
     def __init__(self, root):
         self.root = root
@@ -236,11 +267,13 @@ class VLSMApp:
         self.linenumbers.attach(self.input_text)
 
         # Placeholder de ayuda
-        hint = "Ejemplo:\nIP 192.168.1.0 MASK /24 HOSTS 50,30,10 NAME Oficina\nIP 10.0.0.0 MASK /8 HOSTS 100,200"
-        self.input_text.insert("1.0", hint)
-        self.input_text.config(fg="#585b70")
+        self.hint_text = (
+            "Ejemplo:\n"
+            "IP 192.168.1.0 MASK /24 HOSTS 50,30,10 NAME Oficina\n"
+            "IP 10.0.0.0 MASK /8 HOSTS 100,200"
+        )
+        self._show_hint()
         self.input_text.bind("<FocusIn>", self._clear_hint)
-        self._hint_active = True
 
         # ── BOTONES ───────────────────────────────────────────────
         btn_frame = ttk.Frame(root)
@@ -294,17 +327,31 @@ class VLSMApp:
         widget.insert(tk.END, text)
         widget.config(state=tk.DISABLED)
 
+    # Borra el texto de ejemplo cuando el usuario hace clic en el área de entrada.
     def _clear_hint(self, event):
         if self._hint_active:
             self.input_text.delete("1.0", tk.END)
             self.input_text.config(fg="#cdd6f4")
             self._hint_active = False
+            self.input_text.mark_set("insert", "1.0")
+            self.root.after_idle(self.linenumbers.redraw)
+
+    # Muestra el texto de ejemplo al iniciar el programa
+    # y cuando el usuario presiona el botón Limpiar.
+    def _show_hint(self):
+        self.input_text.config(state=tk.NORMAL)
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert("1.0", self.hint_text)
+        self.input_text.config(fg="#585b70")
+        self._hint_active = True
+        self.root.after_idle(self.linenumbers.redraw)
 
     # ── EVENTOS ───────────────────────────────────────────────────
     def on_key_release(self, event=None):
         self.linenumbers.redraw()
         self.highlight_reserved_words()
 
+    # Resalta visualmente las palabras reservadas IP, MASK, HOSTS y NAME.
     def highlight_reserved_words(self):
         colors = {'IP': '#89b4fa', 'MASK': '#a6e3a1', 'HOSTS': '#fab387', 'NAME': '#f9e2af'}
         for word, color in colors.items():
@@ -321,6 +368,12 @@ class VLSMApp:
                 idx = end
 
     # ── ANÁLISIS ──────────────────────────────────────────────────
+    # Ejecuta el flujo principal:
+    # 1. Lee la entrada del usuario.
+    # 2. Realiza el análisis léxico.
+    # 3. Realiza el análisis sintáctico.
+    # 4. Calcula la tabla VLSM si no hay errores.
+    # 5. Muestra los resultados en la interfaz.
     def analyze(self):
         if self._hint_active:
             messagebox.showwarning("Advertencia", "Introduce un código para analizar.")
@@ -394,13 +447,17 @@ class VLSMApp:
 
         for nombre, subredes in grouped.items():
             vlsm_out += f"  Red: {nombre}\n"
-            vlsm_out += f"  {'─'*70}\n"
-            vlsm_out += (
+
+            header = (
                 f"  {'#':<4} {'Hosts Solic.':<14} {'Hosts Disp.':<13} "
                 f"{'Dirección Red':<18} {'CIDR':<8} {'Máscara':<18} "
                 f"{'Primera IP':<16} {'Última IP':<16} {'Broadcast'}\n"
             )
-            vlsm_out += f"  {'─'*70}\n"
+            separator = "  " + "─" * (len(header) + 3) + "\n"
+            vlsm_out += separator
+            vlsm_out += header
+            vlsm_out += separator
+
             for i, s in enumerate(subredes, 1):
                 vlsm_out += (
                     f"  {i:<4} {s['hosts_solicitados']:<14} {s['hosts_disponibles']:<13} "
@@ -415,20 +472,23 @@ class VLSMApp:
             messagebox.showinfo("Análisis completo", f"✅ {len(all_results)} subred(es) calculada(s) correctamente.")
 
     # ── LIMPIAR ───────────────────────────────────────────────────
+    # Limpia el área donde se muestran los errores.
     def clear_errors(self):
         self._write(self.error_text, "", clear=True)
 
+    # Limpia tokens, errores, tabla VLSM y restaura el texto de ejemplo.
     def clear_all(self):
         self.clear_errors()
         self._write(self.token_text, "", clear=True)
-        self._write(self.vlsm_text,  "", clear=True)
-        self.input_text.config(state=tk.NORMAL)
-        self.input_text.delete("1.0", tk.END)
+        self._write(self.vlsm_text, "", clear=True)
         self.vlsm_data = None
+        self._show_hint()
 
-
+# Punto de entrada del programa.
+# Este bloque solo se ejecuta cuando el archivo se abre directamente,
+# no cuando se importa desde otro archivo.
 if __name__ == "__main__":
-    root = tk.Tk()
-    root.minsize(800, 600)
-    app = VLSMApp(root)
-    root.mainloop()
+    root = tk.Tk() # Crea la ventana principal de la interfaz gráfica.
+    root.minsize(800, 600) # Define el tamaño mínimo de la ventana.
+    app = VLSMApp(root) # Crea la aplicación TecNet Finder dentro de la ventana principal.
+    root.mainloop() # Mantiene abierta la ventana y espera las acciones del usuario.
