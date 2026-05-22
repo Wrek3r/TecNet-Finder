@@ -2,30 +2,31 @@ import re
 import math
 import tkinter as tk
 import ipaddress
-from tkinter import ttk, font, scrolledtext, messagebox, filedialog
-import openpyxl
-
+from tkinter import ttk, font, scrolledtext, messagebox
 # --- LÉXICO ---
 class VLSMLexer:
     def __init__(self):
         self.tokens = [
-            (r'\bIP\b',     'IP'),
-            (r'\bMASK\b',   'MASK'),
-            (r'\bHOSTS\b',  'HOSTS'),
-            (r'\bNAME\b',   'NAME'),
-            (r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+', 'IP_ADDRESS'),
-            (r'/\d+',       'SUBNET_MASK'),
-            (r'\d+',        'NUMBER'),
+            (r'\bIP\b', 'IP'),
+            (r'\bMASK\b','MASK'),
+            (r'\bHOSTS\b','HOSTS'),
+            (r'\bNAME\b', 'NAME'),
+            #(r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+', 'IP_ADDRESS'), esta solo no validaba el formato correcto de IP, por eso se reemplazó por la siguiente expresión regular más completa:
+            (r'\b(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\b', 'IP_ADDRESS'),
+            (r'/\d+','SUBNET_MASK'),
+            (r'\d+','NUMBER'),
             (r'[A-Za-z_][A-Za-z0-9_]*', 'IDENTIFIER'),
-            (r',',          'COMMA'),
-            (r'\s+',        None),
+            (r',','COMMA'),
+            (r'\s+', None),
         ]
+
     def tokenize(self, code):
         tokens = []
-        errors = []
+        errores = []
         line_num = 1
         col_num = 0
         last_type = None
+
         while code:
             match = None
             for pattern, token_type in self.tokens:
@@ -47,7 +48,7 @@ class VLSMLexer:
                                 tokens.append((token_type, text, line_num, start_col))
                                 last_type = token_type
                             else:
-                                errors.append(
+                                errores.append(
                                     f"Token no reconocido en la línea {line_num}, posición {start_col}: '{text}'"
                                 )
                         else:
@@ -56,12 +57,12 @@ class VLSMLexer:
                     break
             if not match:
                 error_fragment = code.split()[0] if code.split() else code[0]
-                errors.append(
+                errores.append(
                     f"Token no reconocido en la línea {line_num}, posición {col_num}: '{error_fragment}'"
                 )
                 code = code[len(error_fragment):]
                 col_num += len(error_fragment)
-        return tokens, errors
+        return tokens, errores
 
 
 # --- SINTÁCTICO ---
@@ -139,90 +140,6 @@ class VLSMParser:
             raise SyntaxError(f"Se esperaba {token_type} pero no hay más tokens")
 
 
-# --- SEMÁNTICO ---
-class VLSMSemanticAnalyzer:
-    def __init__(self):
-        self.errors = []
-
-    def analyze(self, blocks):
-        """Valida cada bloque semánticamente antes del cálculo VLSM."""
-        valid_blocks = []
-        for block in blocks:
-            if self._validate_block(block):
-                valid_blocks.append(block)
-        return valid_blocks
-
-    def _validate_block(self, block):
-        ip_str    = block['ip_address']
-        mask_str  = block['subnet_mask']
-        hosts     = block['num_hosts']
-        name      = block.get('name', None)
-        ok = True
-
-        # 1. Validar dirección IP
-        try:
-            ip_obj = ipaddress.IPv4Address(ip_str)
-        except ValueError:
-            self.errors.append(f"IP inválida: '{ip_str}'")
-            return False
-
-        # 2. Validar prefijo CIDR
-        try:
-            cidr = int(mask_str[1:])  # quita el '/'
-            if not (0 <= cidr <= 32):
-                raise ValueError
-        except ValueError:
-            self.errors.append(f"Máscara inválida: '{mask_str}'. Debe estar entre /0 y /32.")
-            return False
-
-        # 3. Validar que la IP sea dirección de red (host bits = 0)
-        try:
-            network = ipaddress.IPv4Network(f"{ip_str}{mask_str}", strict=True)
-        except ValueError:
-            self.errors.append(
-                f"'{ip_str}' no es una dirección de red válida para la máscara '{mask_str}'. "
-                f"¿Quisiste decir '{ipaddress.IPv4Network(f'{ip_str}{mask_str}', strict=False).network_address}'?"
-            )
-            ok = False
-
-        # 4. Validar que haya al menos un host
-        if not hosts:
-            self.errors.append(f"La red '{ip_str}' no tiene hosts definidos.")
-            return False
-
-        # 5. Validar valores individuales de hosts
-        for h in hosts:
-            if h <= 0:
-                self.errors.append(f"El número de hosts debe ser mayor a 0 (se encontró {h} en red '{ip_str}').")
-                ok = False
-            if h > 2**30:
-                self.errors.append(f"El número de hosts {h} es demasiado grande en red '{ip_str}'.")
-                ok = False
-
-        # 6. Validar que todos los hosts caben dentro de la red base
-        if ok:
-            try:
-                network = ipaddress.IPv4Network(f"{ip_str}{mask_str}", strict=False)
-                total_disponibles = network.num_addresses - 2  # sin red ni broadcast
-                total_requerido = sum(2 ** math.ceil(math.log2(h + 2)) for h in hosts)
-                if total_requerido > network.num_addresses:
-                    self.errors.append(
-                        f"Los hosts solicitados ({total_requerido} direcciones necesarias) "
-                        f"no caben en la red {ip_str}{mask_str} "
-                        f"({network.num_addresses} direcciones disponibles)."
-                    )
-                    ok = False
-            except Exception:
-                pass
-
-        # 7. Validar nombre de red (si existe)
-        if name and not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', name):
-            self.errors.append(f"Nombre de red inválido: '{name}'. Solo letras, números y guion bajo.")
-            ok = False
-
-        return ok
-
-
 # --- CÁLCULO VLSM ---
 def calculate_vlsm(ip_address, subnet_mask, num_hosts_list, nombre_red=None):
     results = []
@@ -258,64 +175,6 @@ def calculate_vlsm(ip_address, subnet_mask, num_hosts_list, nombre_red=None):
     return results
 
 
-# --- EXPORTAR A EXCEL ---
-def export_to_excel(vlsm_data):
-    if not vlsm_data:
-        messagebox.showerror("Error", "No hay datos para exportar.")
-        return
-
-    file_path = filedialog.asksaveasfilename(
-        defaultextension=".xlsx",
-        filetypes=[("Archivos de Excel", "*.xlsx")]
-    )
-    if not file_path:
-        return
-
-    workbook = openpyxl.Workbook()
-    workbook.remove(workbook.active)
-
-    # Agrupar por nombre/ip
-    grouped = {}
-    for subred in vlsm_data:
-        key = subred.get('nombre_red') or subred['ip_base']
-        grouped.setdefault(key, []).append(subred)
-
-    header_map = {
-        'hosts_solicitados':      'Hosts Solicitados',
-        'hosts_disponibles':      'Hosts Disponibles',
-        'direccion_de_red':       'Dirección de Red',
-        'nueva_mascara':          'Máscara CIDR',
-        'mascara_decimal':        'Máscara Decimal',
-        'primera_ip_utilizable':  'Primera IP Utilizable',
-        'ultima_ip_utilizable':   'Última IP Utilizable',
-        'direccion_de_broadcast': 'Broadcast',
-    }
-
-    for nombre_red, subredes in grouped.items():
-        sheet_name = f"Red {nombre_red}"[:31]  # Excel limita a 31 chars
-        sheet = workbook.create_sheet(title=sheet_name)
-
-        # Cabeceras
-        headers = ['Subred'] + list(header_map.values())
-        for col, h in enumerate(headers, 1):
-            cell = sheet.cell(row=1, column=col, value=h)
-            cell.font = openpyxl.styles.Font(bold=True)
-
-        # Filas de datos
-        for i, subred in enumerate(subredes, start=2):
-            sheet.cell(row=i, column=1, value=i - 1)
-            for col, key in enumerate(header_map.keys(), 2):
-                sheet.cell(row=i, column=col, value=subred.get(key, ''))
-
-        # Ajustar ancho de columnas
-        for col in sheet.columns:
-            max_len = max((len(str(c.value)) for c in col if c.value), default=10)
-            sheet.column_dimensions[col[0].column_letter].width = max_len + 4
-
-    workbook.save(file_path)
-    messagebox.showinfo("Exportar a Excel", f"Datos exportados exitosamente en:\n{file_path}")
-
-
 # --- NÚMEROS DE LÍNEA ---
 class TextLineNumbers(tk.Canvas):
     def __init__(self, *args, **kwargs):
@@ -342,7 +201,7 @@ class TextLineNumbers(tk.Canvas):
 class VLSMApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Compilador VLSM")
+        self.root.title("TecNet Finder")
         self.root.configure(bg="#1e1e2e")
 
         style = ttk.Style()
@@ -380,15 +239,14 @@ class VLSMApp:
         hint = "Ejemplo:\nIP 192.168.1.0 MASK /24 HOSTS 50,30,10 NAME Oficina\nIP 10.0.0.0 MASK /8 HOSTS 100,200"
         self.input_text.insert("1.0", hint)
         self.input_text.config(fg="#585b70")
-        self.input_text.bind("<FocusIn>",  self._clear_hint)
+        self.input_text.bind("<FocusIn>", self._clear_hint)
         self._hint_active = True
 
         # ── BOTONES ───────────────────────────────────────────────
         btn_frame = ttk.Frame(root)
         btn_frame.pack(pady=6)
-        ttk.Button(btn_frame, text="▶  Analizar",        command=self.analyze).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btn_frame, text="📊  Exportar Excel",  command=self.export_to_excel).pack(side=tk.LEFT, padx=6)
-        ttk.Button(btn_frame, text="🗑  Limpiar",         command=self.clear_all).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn_frame, text="▶  Analizar",       command=self.analyze).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btn_frame, text="🗑  Limpiar",        command=self.clear_all).pack(side=tk.LEFT, padx=6)
 
         # ── PESTAÑAS DE SALIDA ────────────────────────────────────
         notebook = ttk.Notebook(root)
@@ -401,17 +259,17 @@ class VLSMApp:
 
         # Pestaña 1: Tokens
         tab_tokens = ttk.Frame(notebook)
-        notebook.add(tab_tokens, text='🔍 Tokens')
+        notebook.add(tab_tokens, text='Tokens')
         self.token_text = self._make_output(tab_tokens)
 
         # Pestaña 2: VLSM
         tab_vlsm = ttk.Frame(notebook)
-        notebook.add(tab_vlsm, text='🌐 Tabla VLSM')
+        notebook.add(tab_vlsm, text='Tabla VLSM')
         self.vlsm_text = self._make_output(tab_vlsm)
 
         # Pestaña 3: Errores
         tab_errors = ttk.Frame(notebook)
-        notebook.add(tab_errors, text='⚠  Errores')
+        notebook.add(tab_errors, text='Errores')
         self.error_text = self._make_output(tab_errors, fg="#f38ba8")
         ttk.Button(tab_errors, text="Borrar Errores", command=self.clear_errors).pack(pady=4)
 
@@ -511,22 +369,9 @@ class VLSMApp:
             self._write(self.vlsm_text, "No se encontraron bloques válidos.\n", clear=True)
             return
 
-        # ── 3. SEMÁNTICO ──
-        semantic = VLSMSemanticAnalyzer()
-        valid_blocks = semantic.analyze(blocks)
-
-        if semantic.errors:
-            self._write(self.error_text, "\n=== ERRORES SEMÁNTICOS ===\n")
-            for e in semantic.errors:
-                self._write(self.error_text, f"  {e}\n")
-
-        if not valid_blocks:
-            self._write(self.vlsm_text, "No hay bloques semánticamente válidos para calcular.\n", clear=True)
-            return
-
-        # ── 4. CÁLCULO VLSM ──
+        # ── 3. CÁLCULO VLSM (usando blocks directamente, sin semántico) ──
         all_results = []
-        for block in valid_blocks:
+        for block in blocks:
             try:
                 result = calculate_vlsm(
                     block['ip_address'],
@@ -540,7 +385,7 @@ class VLSMApp:
 
         self.vlsm_data = all_results
 
-        # ── 5. MOSTRAR TABLA VLSM ──
+        # ── 4. MOSTRAR TABLA VLSM ──
         vlsm_out = "=== TABLA VLSM ===\n\n"
         grouped = {}
         for r in all_results:
@@ -566,7 +411,7 @@ class VLSMApp:
 
         self._write(self.vlsm_text, vlsm_out, clear=True)
 
-        if not parser.errors and not semantic.errors:
+        if not parser.errors:
             messagebox.showinfo("Análisis completo", f"✅ {len(all_results)} subred(es) calculada(s) correctamente.")
 
     # ── LIMPIAR ───────────────────────────────────────────────────
@@ -580,13 +425,6 @@ class VLSMApp:
         self.input_text.config(state=tk.NORMAL)
         self.input_text.delete("1.0", tk.END)
         self.vlsm_data = None
-
-    # ── EXPORTAR ─────────────────────────────────────────────────
-    def export_to_excel(self):
-        if self.vlsm_data:
-            export_to_excel(self.vlsm_data)
-        else:
-            messagebox.showerror("Error", "Primero analiza un código válido para exportar.")
 
 
 if __name__ == "__main__":
