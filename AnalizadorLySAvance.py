@@ -71,8 +71,8 @@ class VLSMLexer:
             # Palabras reservadas.
             # Se usa lookahead (?=...) para reconocerlas también si vienen pegadas
             # al valor esperado, por ejemplo IP192 o MASK/24.
-            (r'\bIP(?=\s|\d)', 'IP'),
-            (r'\bMASK(?=\s|/)', 'MASK'),
+            (r'\bIP(?=\s|\d|$)', 'IP'),
+            (r'\bMASK(?=\s|/|$)', 'MASK'),
             (r'\bHOSTS(?=\s|\d|,|$)', 'HOSTS'),
             (r'\bNAME\b', 'NAME'),
 
@@ -180,12 +180,20 @@ class VLSMParser:
         # Si aparecen NUMBER, DOT u otros tokens, el error es sintáctico,
         # porque los tokens existen, pero no forman la estructura esperada.
         if self.pos >= len(self.tokens) or self.tokens[self.pos][0] != 'IP_ADDRESS':
-            token = self.tokens[self.pos] if self.pos < len(self.tokens) else (None, None, '?', '?')
-            
-            ejemplo_ip = describe_expected_token('IP_ADDRESS', token, self.tokens, self.pos)
+            ejemplo_ip = describe_expected_token('IP_ADDRESS', None, self.tokens, self.pos)
+
+            if self.pos >= len(self.tokens):
+                raise SyntaxError(
+                    f"Error sintáctico: dirección IP incompleta o mal formada. "
+                    f"Después de IP se esperaba IP_ADDRESS ({ejemplo_ip}), "
+                    f"pero se llegó al fin de la entrada."
+                )
+
+            token = self.tokens[self.pos]
+
             raise SyntaxError(
                 f"Error sintáctico: dirección IP incompleta o mal formada. "
-                f"Después de IP se esperaba por ejemplo IP_ADDRESS ({ejemplo_ip}), "
+                f"Después de IP se esperaba IP_ADDRESS ({ejemplo_ip}), "
                 f"pero se encontró {token[0]} ('{token[1]}') "
                 f"en línea {token[2]}, posición {token[3]}."
             )
@@ -196,12 +204,19 @@ class VLSMParser:
         
         self.expect('HOSTS')
         if self.pos >= len(self.tokens) or self.tokens[self.pos][0] != 'NUMBER':
-            token = self.tokens[self.pos] if self.pos < len(self.tokens) else (None, None, '?', '?')
-            valor = token[1] if token[1] is not None else "fin de entrada"
+            if self.pos >= len(self.tokens):
+                raise SyntaxError(
+                    f"Error sintáctico: después de HOSTS se esperaba al menos un NUMBER "
+                    f"con la cantidad de hosts, por ejemplo 50, "
+                    f"pero se llegó al fin de la entrada."
+                )
+
+            token = self.tokens[self.pos]
+
             raise SyntaxError(
                 f"Error sintáctico: después de HOSTS se esperaba al menos un NUMBER "
-                f"con la cantidad de hosts, por ejemplo 50. "
-                f"Se encontró {token[0]} ('{valor}') "
+                f"con la cantidad de hosts, por ejemplo 50, "
+                f"pero se encontró {token[0]} ('{token[1]}') "
                 f"en línea {token[2]}, posición {token[3]}."
             )
         num_hosts = self.parse_hosts()
