@@ -68,11 +68,13 @@ class VLSMLexer:
         # Cada elemento contiene una expresión regular y el tipo de token que genera.
         # El orden es importante porque las palabras reservadas se revisan antes que IDENTIFIER.
         self.tokens = [
-            (r'\bIP\b', 'IP'),
-            (r'\bMASK\b', 'MASK'),
-            (r'\bHOSTS\b', 'HOSTS'),
+            # Palabras reservadas.
+            # Se usa lookahead (?=...) para reconocerlas también si vienen pegadas
+            # al valor esperado, por ejemplo IP192 o MASK/24.
+            (r'\bIP(?=\s|\d)', 'IP'),
+            (r'\bMASK(?=\s|/)', 'MASK'),
+            (r'\bHOSTS(?=\s|\d|,|$)', 'HOSTS'),
             (r'\bNAME\b', 'NAME'),
-
 
             #(r'[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+', 'IP_ADDRESS'), esta solo no validaba el formato correcto de IP, por eso se reemplazó por la siguiente expresión regular más completa
 
@@ -204,11 +206,30 @@ class VLSMParser:
             )
         num_hosts = self.parse_hosts()
         name = None
+
+        # El nombre de la red es opcional, pero si aparece NAME,
+        # obligatoriamente debe venir un IDENTIFIER después.
         if self.pos < len(self.tokens) and self.tokens[self.pos][0] == 'NAME':
+            name_token = self.tokens[self.pos]
             self.pos += 1
-            if self.pos < len(self.tokens) and self.tokens[self.pos][0] == 'IDENTIFIER':
-                name = self.tokens[self.pos][1]
-                self.pos += 1
+
+            if self.pos >= len(self.tokens):
+                raise SyntaxError(
+                    f"Error sintáctico: después de NAME se esperaba IDENTIFIER "
+                    f"con el nombre de la red, pero no hay más tokens "
+                    f"en línea {name_token[2]}, posición {name_token[3]}."
+                )
+
+            if self.tokens[self.pos][0] != 'IDENTIFIER':
+                token = self.tokens[self.pos]
+                raise SyntaxError(
+                    f"Error sintáctico: después de NAME se esperaba IDENTIFIER "
+                    f"con el nombre de la red, pero se encontró {token[0]} ('{token[1]}') "
+                    f"en línea {token[2]}, posición {token[3]}."
+                )
+
+            name = self.tokens[self.pos][1]
+            self.pos += 1
         return {
             'ip_address': ip_address,
             'subnet_mask': subnet_mask,
@@ -217,18 +238,39 @@ class VLSMParser:
         }
 
     # Procesa la lista de hosts separados por comas.
-    # Ejemplo: 50,30,10 se convierte en [50, 30, 10].
+    # Ejemplo válido: 50,30,10 se convierte en [50, 30, 10].
     def parse_hosts(self):
         hosts = []
-        while self.pos < len(self.tokens):
+
+        # El primer valor de HOSTS debe ser un número.
+        token = self.tokens[self.pos]
+        hosts.append(int(token[1]))
+        self.pos += 1
+
+        # Después de una coma siempre debe venir otro número.
+        while self.pos < len(self.tokens) and self.tokens[self.pos][0] == 'COMMA':
+            comma_token = self.tokens[self.pos]
+            self.pos += 1
+
+            if self.pos >= len(self.tokens):
+                raise SyntaxError(
+                    f"Error sintáctico: después de la coma se esperaba NUMBER "
+                    f"con otra cantidad de hosts, pero no hay más tokens "
+                    f"en línea {comma_token[2]}, posición {comma_token[3]}."
+                )
+
             token = self.tokens[self.pos]
-            if token[0] == 'NUMBER':
-                hosts.append(int(token[1]))
-                self.pos += 1
-            elif token[0] == 'COMMA':
-                self.pos += 1
-            else:
-                break
+
+            if token[0] != 'NUMBER':
+                raise SyntaxError(
+                    f"Error sintáctico: después de la coma se esperaba NUMBER "
+                    f"con otra cantidad de hosts, pero se encontró {token[0]} ('{token[1]}') "
+                    f"en línea {token[2]}, posición {token[3]}."
+                )
+
+            hosts.append(int(token[1]))
+            self.pos += 1
+
         return hosts
 
     # Verifica que el token actual sea del tipo esperado.
