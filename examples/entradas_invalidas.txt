@@ -1,4 +1,39 @@
-IP 192.168.1.5 MASK /24 HOSTS 50
+# CASO 1: IP incompleta
+IP 192.168.1.MASK /24 HOSTS 50
+Salida esperada: error sintáctico. Después de IP se esperaba IP_ADDRESS con una dirección IP completa.
+
+# CASO 2: Orden incorrecto de tokens
 IP 192.168.1.0 HOSTS 50 MASK /24
-IP 192.168.1.0 MASK /33 HOSTS 50
+Salida esperada: error sintáctico. Después de IP_ADDRESS se esperaba MASK, pero se encontró HOSTS.
+
+# CASO 3: Máscara sin diagonal
+IP 192.168.1.0 MASK 24 HOSTS 50
+Salida esperada: error sintáctico. Después de MASK se esperaba SUBNET_MASK, por ejemplo /24.
+
+# CASO 4: HOSTS sin número
+IP 192.168.1.0 MASK /24 HOSTS
+Salida esperada: error sintáctico. Después de HOSTS se esperaba al menos un NUMBER con la cantidad de hosts.
+
+# CASO 5: Lista de hosts con doble coma
+IP 192.168.1.0 MASK /24 HOSTS 50,,30
+Salida esperada: error sintáctico. Después de la coma se esperaba NUMBER, pero se encontró otra COMMA.
+
+# CASO 6: Lista de hosts terminada en coma
+IP 192.168.1.0 MASK /24 HOSTS 50,
+Salida esperada: error sintáctico. Después de la coma se esperaba NUMBER con otra cantidad de hosts.
+
+# CASO 7: NAME sin identificador
+IP 192.168.1.0 MASK /24 HOSTS 50 NAME
+Salida esperada: error sintáctico. Después de NAME se esperaba IDENTIFIER con el nombre de la red.
+
+# CASO 8: Identificador fuera de lugar
+IP 192.168.1.0 MASK /24 HOSTS 50 Oficina
+Salida esperada: error léxico. El identificador Oficina solo es válido después de NAME.
+
+# CASO 9: Símbolo no reconocido
 IP 192.168.1.0 MASK /24 HOSTS 50 @
+Salida esperada: error léxico. El símbolo @ no pertenece al lenguaje de TecNet Finder.
+
+# CASO 10: Falta la palabra reservada IP
+192.168.1.0 MASK /24 HOSTS 50
+Salida esperada: error sintáctico o léxico según el reconocimiento inicial. La instrucción no inicia con la palabra reservada IP.
