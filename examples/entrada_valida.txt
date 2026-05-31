@@ -1,2 +1,24 @@
+# CASO 1: Entrada válida completa con nombre de red
 IP 192.168.1.0 MASK /24 HOSTS 50,30,10 NAME Oficina
+Salida esperada: reconoce tokens, valida sintaxis, genera árbol sintáctico y calcula tabla VLSM para Oficina.
+
+# CASO 2: Entrada válida sin nombre de red
 IP 10.0.0.0 MASK /8 HOSTS 100,200
+Salida esperada: reconoce tokens, valida sintaxis, genera árbol sintáctico y calcula tabla VLSM sin nombre de red.
+
+# CASO 3: Entrada válida con una sola cantidad de hosts
+IP 172.16.0.0 MASK /16 HOSTS 25 NAME Laboratorio
+Salida esperada: reconoce tokens, valida sintaxis y genera una tabla VLSM con una subred.
+
+# CASO 4: Entrada válida con varias cantidades de hosts
+IP 192.168.10.0 MASK /24 HOSTS 80,40,20,10 NAME Escuela
+Salida esperada: reconoce tokens, valida sintaxis y genera varias subredes ordenadas de mayor a menor cantidad de hosts.
+
+# CASO 5: Entrada válida con palabras reservadas pegadas al valor siguiente
+IP192.168.5.0 MASK/24 HOSTS50,20 NAME RedPrueba
+Salida esperada: reconoce las palabras reservadas IP, MASK y HOSTS aunque estén pegadas al valor siguiente, valida la sintaxis y genera tabla VLSM.
+
+# CASO 6: Entrada válida con varias redes en el mismo archivo
+IP 192.168.20.0 MASK /24 HOSTS 60,30 NAME Ventas
+IP 10.10.0.0 MASK /16 HOSTS 120,60,30 NAME Administracion
+Salida esperada: reconoce y procesa dos bloques válidos, genera dos árboles sintácticos y calcula las tablas VLSM correspondientes.
