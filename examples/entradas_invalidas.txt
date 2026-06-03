@@ -1,39 +1,27 @@
-# CASO 1: IP incompleta
-IP 192.168.1.MASK /24 HOSTS 50
-Salida esperada: error sintáctico. Después de IP se esperaba IP_ADDRESS con una dirección IP completa.
+# Error sintáctico por instrucción duplicada
+IP 192.168.1.0 MASK /24 HOSTS 50 NAME Oficina
+IP 192.168.1.0 MASK /24 HOSTS 50 NAME Oficina
+Salida esperada: error sintáctico por instrucción duplicada en la segunda línea.
 
-# CASO 2: Orden incorrecto de tokens
+# Error léxico y sintáctico en diferentes líneas
+IP 192.168.1.0 MAS /24 HOSTS 50 NAME Oficina @
+IP 192.168.1. MASK /24 HOSTS 50 NAME Oficina
+Salida esperada: reporta errores léxicos y sintácticos, sin detenerse solo en el primer error.
+
+# Error por doble coma y NAME incompleto
+IP 10.0.0.0 MASK /8 HOSTS 100,,200 NAME
+Salida esperada: reporta error por doble coma y error porque después de NAME se esperaba IDENTIFIER.
+
+# Entrada válida, inválida y válida
+IP 192.168.1.0 MASK /24 HOSTS 50 NAME Oficina
+IP 10.0.0.0 MASK /8 HOSTS 100,,200 NAME Central
+IP 172.16.0.0 MASK /16 HOSTS 25 NAME Laboratorio
+Salida esperada: reporta error en la segunda instrucción y procesa solo los bloques válidos.
+
+# Error por orden incorrecto
 IP 192.168.1.0 HOSTS 50 MASK /24
-Salida esperada: error sintáctico. Después de IP_ADDRESS se esperaba MASK, pero se encontró HOSTS.
+Salida esperada: error sintáctico porque después de IP_ADDRESS se esperaba MASK.
 
-# CASO 3: Máscara sin diagonal
+# Error por máscara sin diagonal
 IP 192.168.1.0 MASK 24 HOSTS 50
-Salida esperada: error sintáctico. Después de MASK se esperaba SUBNET_MASK, por ejemplo /24.
-
-# CASO 4: HOSTS sin número
-IP 192.168.1.0 MASK /24 HOSTS
-Salida esperada: error sintáctico. Después de HOSTS se esperaba al menos un NUMBER con la cantidad de hosts.
-
-# CASO 5: Lista de hosts con doble coma
-IP 192.168.1.0 MASK /24 HOSTS 50,,30
-Salida esperada: error sintáctico. Después de la coma se esperaba NUMBER, pero se encontró otra COMMA.
-
-# CASO 6: Lista de hosts terminada en coma
-IP 192.168.1.0 MASK /24 HOSTS 50,
-Salida esperada: error sintáctico. Después de la coma se esperaba NUMBER con otra cantidad de hosts.
-
-# CASO 7: NAME sin identificador
-IP 192.168.1.0 MASK /24 HOSTS 50 NAME
-Salida esperada: error sintáctico. Después de NAME se esperaba IDENTIFIER con el nombre de la red.
-
-# CASO 8: Identificador fuera de lugar
-IP 192.168.1.0 MASK /24 HOSTS 50 Oficina
-Salida esperada: error léxico. El identificador Oficina solo es válido después de NAME.
-
-# CASO 9: Símbolo no reconocido
-IP 192.168.1.0 MASK /24 HOSTS 50 @
-Salida esperada: error léxico. El símbolo @ no pertenece al lenguaje de TecNet Finder.
-
-# CASO 10: Falta la palabra reservada IP
-192.168.1.0 MASK /24 HOSTS 50
-Salida esperada: error sintáctico o léxico según el reconocimiento inicial. La instrucción no inicia con la palabra reservada IP.
+Salida esperada: error sintáctico porque después de MASK se esperaba SUBNET_MASK, por ejemplo /24.
