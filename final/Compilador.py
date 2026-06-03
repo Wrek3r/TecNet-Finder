@@ -172,28 +172,70 @@ class VLSMParser:
         self.pos = 0
         self.errors = []
 
-    # Procesa todos los bloques de tokens.
-    # Si un bloque es válido, lo agrega a los resultados.
-    # Si hay error sintáctico, lo guarda y trata de continuar.
+    # Procesa todos los bloques de entrada.
+    # Usa modo pánico para continuar después de errores sintácticos.
     def parse(self):
         results = []
+        seen_blocks = set()
+
         while self.pos < len(self.tokens):
+            start_pos = self.pos
+
             try:
-                results.append(self.parse_block())
+                errors_before = len(self.errors)
+                block = self.parse_block()
+                block_has_errors = len(self.errors) > errors_before
+
+                signature = (
+                    block["ip_address"],
+                    block["subnet_mask"],
+                    tuple(block["num_hosts"]),
+                    block["name"]
+                )
+
+                if signature in seen_blocks:
+                    line = self.tokens[start_pos][2]
+                    self.errors.append(
+                        f"Error sintáctico: instrucción duplicada en línea {line}. "
+                        f"La red con IP {block['ip_address']}, máscara {block['subnet_mask']} "
+                        f"y nombre {block['name']} ya fue declarada anteriormente."
+                    )
+
+                elif not block_has_errors:
+                    seen_blocks.add(signature)
+                    results.append(block)
+
             except SyntaxError as e:
                 self.errors.append(str(e))
-                self.synchronize()
-        return results
+                self.synchronize(start_pos)
 
-    # Permite recuperarse de un error sintáctico.
-    # Avanza hasta encontrar otro token IP, que puede iniciar una nueva instrucción.
-    def synchronize(self):
-        while self.pos < len(self.tokens) and self.tokens[self.pos][0] != 'IP':
+            if self.pos == start_pos:
+                self.pos += 1
+
+        return results
+    
+    # Modo pánico: avanza hasta encontrar el inicio de otra instrucción.
+    # En este lenguaje, una nueva instrucción inicia con IP.
+    def synchronize(self, start_pos=None):
+        error_line = None
+
+        if start_pos is not None and start_pos < len(self.tokens):
+            error_line = self.tokens[start_pos][2]
+
+        while self.pos < len(self.tokens):
+            token_type, token_value, line, col = self.tokens[self.pos]
+
+            if token_type == "IP":
+                if error_line is None or line > error_line:
+                    return
+
             self.pos += 1
 
     # Valida una instrucción completa con la estructura:
     # IP <IP_ADDRESS> MASK <SUBNET_MASK> HOSTS <lista_hosts> [NAME <IDENTIFIER>]
     def parse_block(self):
+        source_line = self.tokens[self.pos][2]
+
         self.expect('IP')
 
         # Después de IP debe venir una dirección IP completa.
@@ -251,12 +293,20 @@ class VLSMParser:
             if self.pos >= len(self.tokens):
                 raise SyntaxError(
                     f"Error sintáctico: después de NAME se esperaba IDENTIFIER "
-                    f"con el nombre de la red, pero no hay más tokens "
+                    f"con el nombre de la red, pero se llegó al fin de la entrada "
                     f"en línea {name_token[2]}, posición {name_token[3]}."
                 )
 
-            if self.tokens[self.pos][0] != 'IDENTIFIER':
-                token = self.tokens[self.pos]
+            token = self.tokens[self.pos]
+
+            if token[0] == 'IP' and token[2] > name_token[2]:
+                raise SyntaxError(
+                    f"Error sintáctico: después de NAME se esperaba IDENTIFIER "
+                    f"con el nombre de la red, pero la instrucción terminó sin indicar el nombre "
+                    f"antes de iniciar otra instrucción en línea {token[2]}, posición {token[3]}."
+                )
+
+            if token[0] != 'IDENTIFIER':
                 raise SyntaxError(
                     f"Error sintáctico: después de NAME se esperaba IDENTIFIER "
                     f"con el nombre de la red, pero se encontró {token[0]} ('{token[1]}') "
@@ -269,11 +319,12 @@ class VLSMParser:
             'ip_address': ip_address,
             'subnet_mask': subnet_mask,
             'num_hosts': num_hosts,
-            'name': name
+            'name': name,
+            'source_line': source_line
         }
 
     # Procesa la lista de hosts separados por comas.
-    # Ejemplo válido: 50,30,10 se convierte en [50, 30, 10].
+    # Si encuentra errores, intenta recuperarse para seguir revisando el bloque.
     def parse_hosts(self):
         hosts = []
 
@@ -288,26 +339,44 @@ class VLSMParser:
             self.pos += 1
 
             if self.pos >= len(self.tokens):
-                raise SyntaxError(
+                self.errors.append(
                     f"Error sintáctico: después de la coma se esperaba NUMBER "
                     f"con otra cantidad de hosts, pero no hay más tokens "
                     f"en línea {comma_token[2]}, posición {comma_token[3]}."
                 )
+                return hosts
 
             token = self.tokens[self.pos]
 
             if token[0] != 'NUMBER':
-                raise SyntaxError(
+                self.errors.append(
                     f"Error sintáctico: después de la coma se esperaba NUMBER "
                     f"con otra cantidad de hosts, pero se encontró {token[0]} ('{token[1]}') "
                     f"en línea {token[2]}, posición {token[3]}."
                 )
 
+                # Recuperación local:
+                # Avanza hasta encontrar NUMBER, NAME o el inicio de otra instrucción IP.
+                while (
+                    self.pos < len(self.tokens)
+                    and self.tokens[self.pos][0] not in ('NUMBER', 'NAME', 'IP')
+                ):
+                    self.pos += 1
+
+                # Si se recupera encontrando otro número, lo toma y continúa.
+                if self.pos < len(self.tokens) and self.tokens[self.pos][0] == 'NUMBER':
+                    hosts.append(int(self.tokens[self.pos][1]))
+                    self.pos += 1
+                    continue
+
+                # Si encuentra NAME o IP, deja que parse_block o parse controle lo siguiente.
+                return hosts
+
             hosts.append(int(token[1]))
             self.pos += 1
 
         return hosts
-
+    
     # Verifica que el token actual sea del tipo esperado.
     # Si coincide, avanza; si no coincide, genera un error sintáctico.
     def expect(self, token_type):
@@ -799,6 +868,7 @@ class VLSMApp:
 
         self.vlsm_data = None
         self.tokens = []
+        self.valid_blocks = []
         self.tree_tabs = []
 
         self.hint_text = (
@@ -887,7 +957,7 @@ class VLSMApp:
 
         ttk.Button(
             btn_frame,
-            text="▶  Analizar",
+            text="▶  Compilar",
             command=self.analyze
         ).pack(side=tk.LEFT, padx=6)
 
@@ -1008,7 +1078,22 @@ class VLSMApp:
 
         for col in cols_tokens:
             self.tv_tokens.heading(col, text=col)
-            self.tv_tokens.column(col, anchor="center", width=150)
+
+            if col == "Tipo":
+                self.tv_tokens.column(col, anchor="center", width=280)
+            elif col == "Valor":
+                self.tv_tokens.column(col, anchor="center", width=220)
+            elif col == "Línea":
+                self.tv_tokens.column(col, anchor="center", width=100)
+            else:
+                self.tv_tokens.column(col, anchor="center", width=120)
+
+        self.tv_tokens.tag_configure(
+            "separator",
+            background="#89b4fa",
+            foreground="#1e1e2e",
+            font=("Courier New", 10, "bold")
+        )
 
         scroll_tokens_y = ttk.Scrollbar(
             tab_token_table,
@@ -1173,8 +1258,6 @@ class VLSMApp:
         lexer = VLSMLexer()
         tokens, lex_errors = lexer.tokenize(code)
 
-        self.tokens = tokens
-        self.populate_tables()
 
         analysis_out = "=== ANÁLISIS LÉXICO ===\n"
 
@@ -1190,55 +1273,83 @@ class VLSMApp:
 
         self._write(self.token_text, analysis_out, clear=True)
 
+        # Aquí se guardan errores léxicos, pero NO se detiene el análisis todavía.
+        error_out = ""
+
         if lex_errors:
-            error_out = "=== ERRORES LÉXICOS ===\n"
+            error_out += "=== ERRORES LÉXICOS ===\n"
 
-            for error in lex_errors:
-                error_out += f"  {error}\n"
+            for i, error in enumerate(lex_errors, start=1):
+                error_out += f"  {i}. {error}\n"
 
-            self._write(self.error_text, error_out, clear=True)
-
-            # Cambiar automáticamente a la pestaña de errores
-            self.notebook.select(self.tab_io)
-            self.output_notebook.select(self.tab_errors_output)
-            return
+            error_out += "\n"
 
         # ── 2. ANÁLISIS SINTÁCTICO ───────────────────────────
+        # Aunque haya errores léxicos, se ejecuta el parser con los tokens reconocidos.
+        # Esto permite detectar errores sintácticos en otras líneas.
         parser = VLSMParser(tokens)
         blocks = parser.parse()
         syntax_errors = parser.errors
 
+        self.valid_blocks = blocks
+
+        valid_lines = {block["source_line"] for block in blocks}
+        valid_tokens = [token for token in tokens if token[2] in valid_lines]
+
+        self.tokens = valid_tokens
+        self.populate_tables()
+
+        analysis_out += "\n=== ANÁLISIS SINTÁCTICO ===\n"
+
         if syntax_errors:
-            error_out = "=== ERRORES SINTÁCTICOS ===\n"
+            error_out += "=== ERRORES SINTÁCTICOS ===\n"
 
-            for error in syntax_errors:
-                error_out += f"  {error}\n"
+            for i, error in enumerate(syntax_errors, start=1):
+                error_out += f"  {i}. {error}\n"
 
-            self._write(self.error_text, error_out, clear=True)
+            error_out += "\n"
 
-            analysis_out += "\n=== ANÁLISIS SINTÁCTICO ===\n"
-            analysis_out += "Se encontraron errores sintácticos. Revise la pestaña de errores.\n"
+        # ── 3. SI HAY ERRORES, MOSTRAR TODOS Y DETENER CÁLCULO ──
+        has_errors = bool(lex_errors or syntax_errors)
+
+        if has_errors and not blocks:
+            analysis_out += "Se encontraron errores y no hay bloques válidos para procesar.\n"
+            analysis_out += f"\nErrores léxicos: {len(lex_errors)}\n"
+            analysis_out += f"Errores sintácticos: {len(syntax_errors)}\n"
+            analysis_out += f"Bloques válidos reconocidos: {len(blocks)}\n"
 
             self._write(self.token_text, analysis_out, clear=True)
+            self._write(self.error_text, error_out, clear=True)
 
-            # No generar árbol ni tabla VLSM si hay errores sintácticos
             self.draw_tree([])
+            self.vlsm_data = None
+            self._write(
+                self.vlsm_text,
+                "No se generó tabla VLSM porque no existen bloques válidos.\n",
+                clear=True
+            )
 
-            # Cambiar automáticamente a la pestaña de errores
             self.notebook.select(self.tab_io)
             self.output_notebook.select(self.tab_errors_output)
             return
 
+        if has_errors and blocks:
+            analysis_out += "Se encontraron errores, pero se procesarán únicamente los bloques válidos.\n"
+            analysis_out += f"\nErrores léxicos: {len(lex_errors)}\n"
+            analysis_out += f"Errores sintácticos: {len(syntax_errors)}\n"
+            analysis_out += f"Bloques válidos reconocidos: {len(blocks)}\n\n"
+
+            self._write(self.error_text, error_out, clear=True)
+
+        # ── 4. SI NO HAY BLOQUES VÁLIDOS ─────────────────────
         if not blocks:
-            analysis_out += "\n=== ANÁLISIS SINTÁCTICO ===\n"
             analysis_out += "No se encontraron bloques válidos.\n"
 
             self._write(self.token_text, analysis_out, clear=True)
             self.output_notebook.select(self.tab_analysis_output)
             return
 
-        analysis_out += "\n=== ANÁLISIS SINTÁCTICO ===\n"
-
+        # ── 5. MOSTRAR BLOQUES VÁLIDOS ───────────────────────
         for i, block in enumerate(blocks, start=1):
             nombre = block.get("name") if block.get("name") else "Sin nombre"
 
@@ -1250,12 +1361,12 @@ class VLSMApp:
                 f"  Nombre: {nombre}\n"
             )
 
-        # ── 3. ÁRBOL SINTÁCTICO ──────────────────────────────
-        tree_parser = VLSMParser(tokens)
+        # ── 6. ÁRBOL SINTÁCTICO ──────────────────────────────
+        tree_parser = VLSMParser(valid_tokens)
         tree_blocks = tree_parser.parse_with_tree()
         self.draw_tree(tree_blocks)
 
-        # ── 4. CÁLCULO VLSM ─────────────────────────────────
+        # ── 7. CÁLCULO VLSM ─────────────────────────────────
         all_results = []
 
         for block in blocks:
@@ -1276,12 +1387,16 @@ class VLSMApp:
                     clear=True
                 )
 
+                self.draw_tree([])
+                self.vlsm_data = None
+
+                self.notebook.select(self.tab_io)
                 self.output_notebook.select(self.tab_errors_output)
                 return
 
         self.vlsm_data = all_results
 
-        # ── 5. SALIDA DETALLADA TIPO COMPILADOR ───────
+        # ── 8. SALIDA DETALLADA TIPO COMPILADOR ───────
         analysis_out += "\n=== RESULTADOS VLSM ===\n"
 
         for result in all_results:
@@ -1294,7 +1409,7 @@ class VLSMApp:
                 f"Primera IP utilizable: {result['primera_ip_utilizable']}\n"
                 f"Última IP utilizable: {result['ultima_ip_utilizable']}\n"
                 f"Dirección de broadcast: {result['direccion_de_broadcast']}\n"
-                "--------------------------------------\n"
+                "-----------------------------------------------------------\n"
             )
         
         total_errores = len(lex_errors) + len(syntax_errors)
@@ -1308,7 +1423,7 @@ class VLSMApp:
 
         self._write(self.token_text, analysis_out, clear=True)
 
-        # ── 6. TABLA VLSM FORMATEADA ────────────────────────
+        # ── 9. TABLA VLSM FORMATEADA ────────────────────────
         vlsm_out = "=== TABLA VLSM ===\n\n"
 
         grouped = {}
@@ -1350,13 +1465,22 @@ class VLSMApp:
         self._write(self.vlsm_text, vlsm_out, clear=True)
 
         # Si todo salió bien, mostrar directamente la tabla VLSM
-        self.notebook.select(self.tab_io)
-        self.output_notebook.select(self.tab_vlsm_output)
+        if has_errors:
+            self.notebook.select(self.tab_io)
+            self.output_notebook.select(self.tab_errors_output)
 
-        messagebox.showinfo(
-            "Análisis completo",
-            f"✓ {len(all_results)} subred(es) calculada(s) correctamente."
-        )
+            messagebox.showwarning(
+                "Análisis terminado con errores",
+                f"Se encontraron errores, pero se calcularon {len(all_results)} subred(es) de bloques válidos."
+            )
+        else:
+            self.notebook.select(self.tab_io)
+            self.output_notebook.select(self.tab_vlsm_output)
+
+            messagebox.showinfo(
+                "Análisis completo",
+                f"✓ {len(all_results)} subred(es) calculada(s) correctamente."
+    )
 
 
     # ───────────────────── LIMPIAR ─────────────────────
@@ -1376,6 +1500,7 @@ class VLSMApp:
 
         self.vlsm_data = None
         self.tokens = []
+        self.valid_blocks = []
 
         for item in self.tv_tokens.get_children():
             self.tv_tokens.delete(item)
@@ -1403,7 +1528,7 @@ class VLSMApp:
 
     # ───────────────────── TABLAS INTERNAS ─────────────────────
     # Llena las tablas internas de la interfaz.
-    # Inserta tokens reconocidos y conteo de palabras reservadas.
+    # Agrupa tokens válidos usando filas separadoras por línea/bloque.
     def populate_tables(self):
         for item in self.tv_tokens.get_children():
             self.tv_tokens.delete(item)
@@ -1411,10 +1536,44 @@ class VLSMApp:
         for item in self.tv_reserved.get_children():
             self.tv_reserved.delete(item)
 
+        # Crear etiquetas para cada bloque válido.
+        block_labels = {}
+
+        for index, block in enumerate(getattr(self, "valid_blocks", []), start=1):
+            line = block.get("source_line")
+            name = block.get("name") if block.get("name") else "Sin nombre"
+            ip = block.get("ip_address", "")
+
+            block_labels[line] = f"──── Línea {line} - Red #{index} ────"
+
+        # Agrupar tokens por línea.
+        tokens_by_line = {}
+
         for token in self.tokens:
             token_type, value, line, col = token
-            self.tv_tokens.insert("", tk.END, values=(token_type, value, line, col))
+            tokens_by_line.setdefault(line, []).append(token)
 
+        # Insertar una fila separadora por cada línea válida.
+        for line in sorted(tokens_by_line.keys()):
+            separator_text = block_labels.get(line, f"──── # {line} ────")
+
+            self.tv_tokens.insert(
+                "",
+                tk.END,
+                values=(separator_text, "", "", ""),
+                tags=("separator",)
+            )
+
+            for token in tokens_by_line[line]:
+                token_type, value, line, col = token
+
+                self.tv_tokens.insert(
+                    "",
+                    tk.END,
+                    values=(token_type, value, line, col)
+                )
+
+        # Tabla de palabras reservadas solo con tokens válidos.
         reserved_words = ["IP", "MASK", "HOSTS", "NAME"]
         counts = Counter(token[0] for token in self.tokens if token[0] in reserved_words)
 
@@ -1617,7 +1776,7 @@ class VLSMApp:
                 self.save_current_tree_image,
                 "Guardar árbol como PNG"
             )
-            save_tree_button.place(relx=1.0, x=-42, y=8, anchor="ne")
+            save_tree_button.place(relx=1.0, x=-23, y=8, anchor="ne")
             save_tree_button.lift()
 
             draw_node(canvas, block, width / 2, 60, is_root=True)
