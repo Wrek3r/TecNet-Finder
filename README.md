@@ -17,6 +17,15 @@ El proyecto utiliza un lenguaje específico de dominio, o DSL, para escribir ins
 * Exportación de resultados VLSM a Excel.
 * Texto de ejemplo dentro del área de entrada.
 
+## Soporta ahora:
+* Varias instrucciones de red.
+* Recuperación por modo pánico.
+* Errores léxicos y sintácticos enumerados.
+* Detección de instrucciones duplicadas.
+* Cálculo VLSM para bloques válidos.
+* Exportación a Excel.
+* Árbol sintáctico visual y exportable como PNG.
+
 ## Mejoras complementarias
 
 * Guardado del árbol sintáctico como imagen PNG.
