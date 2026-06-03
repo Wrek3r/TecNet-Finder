@@ -890,7 +890,7 @@ class VLSMApp:
 
         self.notebook.add(self.tab_io, text="Entrada / Salida")
         self.notebook.add(self.tab_tables, text="Tablas")
-        self.notebook.add(self.tab_tree, text="Árbol")
+        self.notebook.add(self.tab_tree, text="Sintaxis")
 
         # Construcción de cada pestaña principal
         self._build_io_tab(self.tab_io)
@@ -1132,15 +1132,215 @@ class VLSMApp:
         self.tv_reserved.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0), pady=8)
         scroll_reserved_y.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8), pady=8)
 
-    # Construye la pestaña donde se muestran los árboles.
-    # Inicializa las listas usadas para guardar árboles generados.
+    # Construye la pestaña de sintaxis.
+    # Incluye producciones usadas, derivación generada y árboles sintácticos.
     def _build_tree(self, parent):
-        self.tree_notebook = ttk.Notebook(parent)
+        self.syntax_notebook = ttk.Notebook(parent)
+        self.syntax_notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        # Subpestaña 1: Producciones usadas
+        self.tab_grammar_used = ttk.Frame(self.syntax_notebook)
+        self.syntax_notebook.add(self.tab_grammar_used, text="Producciones usadas")
+
+        self.grammar_text = self._make_output(self.tab_grammar_used)
+
+        # Subpestaña 2: Derivación generada
+        self.tab_derivation = ttk.Frame(self.syntax_notebook)
+        self.syntax_notebook.add(self.tab_derivation, text="Derivación")
+
+        self.derivation_text = self._make_output(self.tab_derivation)
+
+        # Subpestaña 3: Árboles sintácticos
+        self.tab_tree_visual = ttk.Frame(self.syntax_notebook)
+        self.syntax_notebook.add(self.tab_tree_visual, text="Árboles")
+
+        # Notebook interno para separar árbol textual y árbol gráfico
+        self.tree_views_notebook = ttk.Notebook(self.tab_tree_visual)
+        self.tree_views_notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        # Vista 1: Representación textual
+        self.tab_tree_text = ttk.Frame(self.tree_views_notebook)
+        self.tree_views_notebook.add(self.tab_tree_text, text="Representación textual")
+
+        self.tree_text = self._make_output(self.tab_tree_text)
+
+        # Vista 2: Árbol gráfico
+        self.tab_tree_graphic = ttk.Frame(self.tree_views_notebook)
+        self.tree_views_notebook.add(self.tab_tree_graphic, text="Árbol gráfico")
+
+        self.tree_notebook = ttk.Notebook(self.tab_tree_graphic)
         self.tree_notebook.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
         self.tree_canvases = []
         self.tree_names = []
         self.tree_blocks = []
+
+        self.update_syntax_info([])
+        self.update_tree_text([])
+
+    # Genera el texto base de la gramática del lenguaje.
+    # Esta gramática es fija y trabaja sobre tokens del lexer.
+    def get_base_grammar_text(self):
+        return (
+            "=== GRAMÁTICA BASE ===\n\n"
+            "S → B A\n"
+            "A → B A | ε\n"
+            "B → IP IP_ADDRESS MASK SUBNET_MASK HOSTS L N\n"
+            "L → NUMBER C\n"
+            "C → COMMA NUMBER C | ε\n"
+            "N → NAME IDENTIFIER | ε\n\n"
+            "S = Programa completo\n"
+            "A = Continuación del programa\n"
+            "B = Bloque o instrucción de red\n"
+            "L = Lista de hosts\n"
+            "C = Continuación de la lista de hosts\n"
+            "N = Nombre opcional\n"
+        )
+
+
+    # Genera las producciones aplicadas según los bloques válidos analizados.
+    # No crea una gramática nueva; muestra qué reglas se usaron para la entrada.
+    def build_applied_grammar(self, blocks):
+        output = self.get_base_grammar_text()
+
+        output += "\n=== PRODUCCIONES USADAS EN LA ENTRADA ===\n\n"
+
+        if not blocks:
+            output += "No hay bloques válidos para mostrar producciones usadas.\n"
+            return output
+
+        total_blocks = len(blocks)
+
+        output += "Producciones del programa completo:\n"
+        output += "S → B A\n"
+
+        if total_blocks > 1:
+            output += f"A → B A    ({total_blocks - 1} vez/veces para continuar con más instrucciones)\n"
+
+        output += "A → ε      (termina el programa)\n\n"
+
+        for index, block in enumerate(blocks, start=1):
+            ip = block.get("ip_address", "")
+            mask = block.get("subnet_mask", "")
+            hosts = block.get("num_hosts", [])
+            name = block.get("name")
+
+            output += f"--- Bloque {index} ---\n"
+            output += f"Entrada equivalente: IP {ip} MASK {mask} HOSTS {','.join(map(str, hosts))}"
+
+            if name:
+                output += f" NAME {name}"
+
+            output += "\n\n"
+
+            output += "B → IP IP_ADDRESS MASK SUBNET_MASK HOSTS L N\n"
+            output += "L → NUMBER C\n"
+
+            extra_hosts = max(len(hosts) - 1, 0)
+
+            if extra_hosts > 0:
+                output += f"C → COMMA NUMBER C    ({extra_hosts} vez/veces)\n"
+
+            output += "C → ε\n"
+
+            if name:
+                output += "N → NAME IDENTIFIER\n"
+            else:
+                output += "N → ε\n"
+
+            output += "\n"
+
+        return output
+
+
+    # Genera una derivación del programa y de cada bloque válido.
+    # La derivación sustituye valores reales durante el proceso.
+    def build_derivation_text(self, blocks):
+        output = "=== DERIVACIÓN GENERADA ===\n\n"
+
+        if not blocks:
+            output += "No hay bloques válidos para generar derivación.\n"
+            return output
+
+        total_blocks = len(blocks)
+
+        output += "Derivación general del programa:\n\n"
+        output += "S\n"
+        output += "⇒ B A\n"
+
+        if total_blocks == 1:
+            output += "⇒ B ε\n"
+            output += "⇒ B\n"
+        else:
+            current = "B A"
+
+            for count in range(2, total_blocks + 1):
+                current = ("B " * count) + "A"
+                output += f"⇒ {current.strip()}\n"
+
+            output += f"⇒ {('B ' * total_blocks).strip()} ε\n"
+            output += f"⇒ {('B ' * total_blocks).strip()}\n"
+
+        output += "\n"
+
+        for index, block in enumerate(blocks, start=1):
+            output += self.build_block_derivation(block, index)
+            output += "\n"
+
+        return output
+
+
+    # Genera la derivación izquierda de un bloque válido.
+    # Sustituye tokens por valores reales durante la derivación.
+    def build_block_derivation(self, block, index):
+        ip = block.get("ip_address", "")
+        mask = block.get("subnet_mask", "")
+        hosts = block.get("num_hosts", [])
+        name = block.get("name")
+
+        output = f"--- Derivación del bloque {index} ---\n\n"
+
+        if not hosts:
+            output += "No hay hosts para derivar.\n"
+            return output
+
+        current_hosts = str(hosts[0])
+
+        output += "B\n"
+        output += "⇒ IP IP_ADDRESS MASK SUBNET_MASK HOSTS L N\n"
+        output += f"⇒ IP {ip} MASK SUBNET_MASK HOSTS L N\n"
+        output += f"⇒ IP {ip} MASK {mask} HOSTS L N\n"
+        output += f"⇒ IP {ip} MASK {mask} HOSTS NUMBER C N\n"
+        output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts} C N\n"
+
+        for host in hosts[1:]:
+            output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts} COMMA NUMBER C N\n"
+            current_hosts += f",{host}"
+            output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts} C N\n"
+
+        output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts} ε N\n"
+        output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts} N\n"
+
+        if name:
+            output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts} NAME IDENTIFIER\n"
+            output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts} NAME {name}\n"
+        else:
+            output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts} ε\n"
+            output += f"⇒ IP {ip} MASK {mask} HOSTS {current_hosts}\n"
+
+        return output
+
+    # Actualiza las pestañas de producciones usadas y derivación.
+    # Solo usa bloques válidos reconocidos por el parser.
+    def update_syntax_info(self, blocks):
+        if hasattr(self, "grammar_text"):
+            grammar_out = self.build_applied_grammar(blocks)
+            self._write(self.grammar_text, grammar_out, clear=True)
+
+        if hasattr(self, "derivation_text"):
+            derivation_out = self.build_derivation_text(blocks)
+            self._write(self.derivation_text, derivation_out, clear=True)
+
 
     # Escribe texto en un área de salida deshabilitada.
     # Puede limpiar el contenido anterior antes de escribir.
@@ -1298,6 +1498,7 @@ class VLSMApp:
 
         self.tokens = valid_tokens
         self.populate_tables()
+        self.update_syntax_info(blocks)
 
         analysis_out += "\n=== ANÁLISIS SINTÁCTICO ===\n"
 
@@ -1509,7 +1710,8 @@ class VLSMApp:
             self.tv_reserved.delete(item)
 
         self.draw_tree([])
-
+        self.update_syntax_info([])
+        self.update_tree_text([])
         self._show_hint()
 
         # Regresar a la vista principal
@@ -1584,9 +1786,74 @@ class VLSMApp:
 
     # ───────────────────── ÁRBOL SINTÁCTICO ─────────────────────
 
+    # Actualiza la representación textual de los árboles sintácticos.
+    # Muestra un árbol en texto por cada bloque válido.
+    def update_tree_text(self, tree):
+        if not hasattr(self, "tree_text"):
+            return
+
+        if not tree:
+            self._write(
+                self.tree_text,
+                "No hay árboles válidos para mostrar.\n",
+                clear=True
+            )
+            return
+
+        output = "=== REPRESENTACIÓN TEXTUAL DEL ÁRBOL SINTÁCTICO ===\n\n"
+
+        for index, block in enumerate(tree, start=1):
+            output += f"--- Árbol {index} ---\n"
+            output += self.format_tree_node(block)
+            output += "\n\n"
+
+        self._write(self.tree_text, output, clear=True)
+
+    # Convierte un árbol sintáctico en texto con ramas.
+    # Usa conectores tipo ├──, └── y │ para mejorar la lectura.
+    def format_tree_node(self, node, prefix="", is_last=True):
+        label = self.get_node_label_for_text(node)
+        children = self.get_node_children_for_text(node)
+
+        connector = "└── " if is_last else "├── "
+        output = prefix + connector + label + "\n"
+
+        new_prefix = prefix + ("    " if is_last else "│   ")
+
+        for index, child in enumerate(children):
+            child_is_last = index == len(children) - 1
+            output += self.format_tree_node(child, new_prefix, child_is_last)
+
+        return output
+
+    # Obtiene la etiqueta visible de un nodo del árbol.
+    def get_node_label_for_text(self, node):
+        if isinstance(node, tuple) and len(node) == 2:
+            label, children = node
+
+            if label == "VALOR":
+                return str(children)
+
+            return str(label)
+
+        return str(node)
+
+    # Obtiene los hijos de un nodo del árbol.
+    def get_node_children_for_text(self, node):
+        if isinstance(node, tuple) and len(node) == 2:
+            children = node[1]
+
+            if isinstance(children, list):
+                return children
+
+        return []
+
     # Dibuja el árbol sintáctico dentro de la interfaz.
     # Crea una pestaña por cada bloque válido analizado.
     def draw_tree(self, tree):
+        # Actualiza primero la representación textual del árbol.
+        self.update_tree_text(tree)
+
         # Elimina las pestañas de árboles anteriores antes de dibujar uno nuevo.
         for tab in self.tree_tabs:
             self.tree_notebook.forget(tab)
